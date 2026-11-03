@@ -1,0 +1,6 @@
+{
+  "name": "Запевы стихирных гласов",
+  "description": "Интерактивный тренажёр и справочник по запевам 8 стихирных гласов для клиросных певчих: партии сопрано, альт, тенор, бас и полный хор.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
