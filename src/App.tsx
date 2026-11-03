@@ -8,6 +8,7 @@ import { Header } from './components/Header';
 import { TrainerTab } from './components/TrainerTab';
 import { StudyTab } from './components/StudyTab';
 import { GlasNumber, MasteredByVoice, QuizStats } from './types/chant';
+import { audioManager } from './services/audioManager';
 
 const STATS_STORAGE_KEY = 'zapevy_trainer_stats_v2';
 const THEME_STORAGE_KEY = 'zapevy_theme_v2';
@@ -112,13 +113,18 @@ export default function App() {
     }
   };
 
+  const handleSelectTab = (tab: 'trainer' | 'study') => {
+    audioManager.stop();
+    setActiveTab(tab);
+  };
+
   return (
-    <div className="min-h-screen bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 flex flex-col font-sans selection:bg-amber-500/20 selection:text-amber-900">
+    <div className="min-h-screen bg-stone-50 dark:bg-stone-950 text-stone-900 dark:text-stone-100 flex flex-col font-sans selection:bg-amber-500/20 selection:text-amber-900 transition-colors">
       
       {/* Top Header */}
       <Header
         activeTab={activeTab}
-        onSelectTab={setActiveTab}
+        onSelectTab={handleSelectTab}
         isDarkMode={isDarkMode}
         onToggleDarkMode={() => setIsDarkMode(!isDarkMode)}
       />
@@ -137,10 +143,10 @@ export default function App() {
         )}
       </main>
 
-      {/* Clean minimal footer */}
-      <footer className="py-4 text-center text-xs text-slate-400 dark:text-slate-600 border-t border-slate-200/60 dark:border-slate-800/60">
-        <p className="font-ecclesiastical text-sm text-slate-600 dark:text-slate-400">
-          «Пойте Богу нашему, пойте, пойте Цареви нашему, пойте» (Пс. 46:7)
+      {/* Footer with "by Dima Skulanov 2026" */}
+      <footer className="py-4 text-center text-xs text-stone-400 dark:text-stone-500 border-t border-stone-200/60 dark:border-stone-800/60">
+        <p className="font-mono text-[11px] tracking-wide text-stone-400 dark:text-stone-500">
+          by Dima Skulanov 2026
         </p>
       </footer>
 

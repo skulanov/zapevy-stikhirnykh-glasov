@@ -59,7 +59,6 @@ export const TrainerTab: React.FC<TrainerTabProps> = ({
   // All available options for the active filter
   const availablePoolForFilter = useMemo(() => {
     if (selectedVoiceFilter === 'ANY') {
-      // Any glas that is not mastered in ALL voices
       const allActiveVoices: Array<'S' | 'A' | 'T' | 'B'> = ['S', 'A', 'T', 'B'];
       const candidates: GlasNumber[] = [];
       for (const g of GLAS_LIST) {
@@ -81,7 +80,6 @@ export const TrainerTab: React.FC<TrainerTabProps> = ({
     const validVoices: Array<'S' | 'A' | 'T' | 'B'> =
       filter === 'ANY' ? ['S', 'A', 'T', 'B'] : [filter];
 
-    // Determine candidate pool
     let activePool = currentPool;
     const baseAvailable = filter === 'ANY'
       ? GLAS_LIST.filter(g => validVoices.some(v => !(masteredByVoice[v] || []).includes(g)))
@@ -93,16 +91,13 @@ export const TrainerTab: React.FC<TrainerTabProps> = ({
     }
 
     if (activePool.length === 0) {
-      // Refill pool for new cycle
       activePool = [...baseAvailable];
     }
 
-    // Pick a random glas from the remaining pool
     const randomIndex = Math.floor(Math.random() * activePool.length);
     const chosenGlas = activePool[randomIndex];
     const newPool = activePool.filter((_, idx) => idx !== randomIndex);
 
-    // Pick a voice that hasn't mastered this glas
     const unmasteredVoices = validVoices.filter(
       (v) => !(masteredByVoice[v] || []).includes(chosenGlas)
     );
@@ -126,23 +121,35 @@ export const TrainerTab: React.FC<TrainerTabProps> = ({
     setIsAnswered(false);
     setSelectedAnswer(null);
     setFeedback(null);
-
-    // Start playback
-    audioManager.play(question.voice, question.glas);
   }, [masteredByVoice]);
 
-  // Start question on mount or when filter changes
+  // Stop audio when unmounting
+  useEffect(() => {
+    return () => {
+      audioManager.stop();
+    };
+  }, []);
+
   useEffect(() => {
     pickNextQuestion([], selectedVoiceFilter);
   }, [selectedVoiceFilter, pickNextQuestion]);
 
   const handleNextQuestion = () => {
+    audioManager.stop();
     pickNextQuestion(roundPool, selectedVoiceFilter);
   };
 
-  const handleReplay = () => {
+  const handlePlayToggle = () => {
     if (!currentQuestion) return;
-    audioManager.play(currentQuestion.voice, currentQuestion.glas);
+    if (
+      playerState.isPlaying &&
+      playerState.currentVoice === currentQuestion.voice &&
+      playerState.currentGlas === currentQuestion.glas
+    ) {
+      audioManager.stop();
+    } else {
+      audioManager.play(currentQuestion.voice, currentQuestion.glas);
+    }
   };
 
   const handlePlayAllVoices = () => {
@@ -150,7 +157,6 @@ export const TrainerTab: React.FC<TrainerTabProps> = ({
     audioManager.play('ALL', currentQuestion.glas);
   };
 
-  // Mark current glas as "Знаю!"
   const handleMarkAsKnown = () => {
     if (!currentQuestion) return;
     const voice = currentQuestion.voice;
@@ -166,11 +172,9 @@ export const TrainerTab: React.FC<TrainerTabProps> = ({
       onUpdateMastered(updatedMastered);
     }
 
-    // Move to next question right away
     handleNextQuestion();
   };
 
-  // Reset mastered glas for current voice
   const handleResetMastered = (voice?: 'S' | 'A' | 'T' | 'B') => {
     if (voice) {
       const updated = { ...masteredByVoice, [voice]: [] };
@@ -182,7 +186,6 @@ export const TrainerTab: React.FC<TrainerTabProps> = ({
     setTimeout(() => pickNextQuestion([], selectedVoiceFilter), 50);
   };
 
-  // Handle user answer
   const handleSelectGlas = (glas: GlasNumber) => {
     if (!currentQuestion || isAnswered) return;
 
@@ -252,9 +255,9 @@ export const TrainerTab: React.FC<TrainerTabProps> = ({
       (['S', 'A', 'T', 'B'] as const).forEach((v) => {
         (masteredByVoice[v] || []).forEach((g) => all.add(`${v}-${g}`));
       });
-      return all.size; // out of 32
+      return all.size;
     } else {
-      return (masteredByVoice[selectedVoiceFilter] || []).length; // out of 8
+      return (masteredByVoice[selectedVoiceFilter] || []).length;
     }
   }, [selectedVoiceFilter, masteredByVoice]);
 
@@ -264,61 +267,92 @@ export const TrainerTab: React.FC<TrainerTabProps> = ({
   return (
     <div className="max-w-xl mx-auto space-y-4">
       
-      {/* Prominent Canonical Zapev Text */}
-      <div className="bg-amber-500/10 dark:bg-amber-400/10 border border-amber-500/30 dark:border-amber-400/20 rounded-2xl py-3 px-4 text-center shadow-xs">
-        <span className="text-[11px] font-medium text-amber-700 dark:text-amber-400 uppercase tracking-wider block mb-0.5">
-          Запев стихиры:
-        </span>
-        <p className="text-xl sm:text-2xl font-bold font-ecclesiastical text-slate-900 dark:text-slate-100 tracking-wide">
+      {/* Canonical Zapev Text (transparent container) */}
+      <div className="py-2 px-4 text-center">
+        <p className="text-2xl sm:text-3xl font-bold font-ecclesiastical text-stone-900 dark:text-stone-100 tracking-wide leading-tight">
           «Испове́датися И́мени Твоему́»
         </p>
       </div>
 
-      {/* Voice Part Selector (Mobile-friendly segmented pills) */}
-      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-2.5 shadow-xs space-y-2">
-        <div className="flex items-center justify-between text-xs text-slate-500 dark:text-slate-400 px-1">
+      {/* Voice Part Selector with Full Words */}
+      <div className="bg-white dark:bg-stone-900/90 border border-stone-200/80 dark:border-stone-800/80 rounded-2xl p-2.5 shadow-xs space-y-2">
+        <div className="flex items-center justify-between text-xs text-stone-500 dark:text-stone-400 px-1">
           <span className="font-medium">Партия:</span>
-          {/* Mastered count badge */}
+          
+          {/* Mastered count badge: black text in light theme, #E9DC00 in dark theme */}
           <button
             onClick={() => setShowMasteredList(!showMasteredList)}
-            className="text-[11px] text-amber-600 dark:text-amber-400 font-medium hover:underline flex items-center gap-1"
+            className="text-[11px] font-semibold hover:underline flex items-center gap-1.5 px-1 py-0.5 rounded text-stone-950 dark:text-[#E9DC00]"
           >
-            <CheckCircle className="w-3.5 h-3.5" />
+            <CheckCircle className="w-3.5 h-3.5 text-stone-950 dark:text-[#E9DC00]" />
             <span>Изучено: {totalMasteredCurrentVoice}/{maxTotalForFilter}</span>
           </button>
         </div>
 
-        <div className="grid grid-cols-5 gap-1 p-1 bg-slate-100 dark:bg-slate-800 rounded-xl text-center text-xs">
+        {/* 5 full-word buttons with #E9DC00 on active */}
+        <div className="grid grid-cols-5 gap-1 p-1 bg-stone-100/80 dark:bg-stone-800/80 rounded-xl text-center text-xs">
           <button
             onClick={() => setSelectedVoiceFilter('ANY')}
             className={`py-2 px-1 rounded-lg font-medium transition-all ${
               selectedVoiceFilter === 'ANY'
-                ? 'bg-white dark:bg-slate-700 text-slate-900 dark:text-slate-100 shadow-xs font-semibold'
-                : 'text-slate-600 dark:text-slate-400'
+                ? 'shadow-xs font-bold text-stone-950'
+                : 'text-stone-600 dark:text-stone-400 hover:text-stone-900'
             }`}
+            style={selectedVoiceFilter === 'ANY' ? { backgroundColor: '#E9DC00' } : undefined}
           >
             Любая
           </button>
-          {(['S', 'A', 'T', 'B'] as const).map((v) => (
-            <button
-              key={v}
-              onClick={() => setSelectedVoiceFilter(v)}
-              className={`py-2 px-1 rounded-lg font-medium transition-all ${
-                selectedVoiceFilter === v
-                  ? 'bg-white dark:bg-slate-700 text-slate-900 dark:text-slate-100 shadow-xs font-semibold'
-                  : 'text-slate-600 dark:text-slate-400'
-              }`}
-            >
-              {VOICE_LABELS[v].short}
-            </button>
-          ))}
+          <button
+            onClick={() => setSelectedVoiceFilter('S')}
+            className={`py-2 px-1 rounded-lg font-medium transition-all ${
+              selectedVoiceFilter === 'S'
+                ? 'shadow-xs font-bold text-stone-950'
+                : 'text-stone-600 dark:text-stone-400 hover:text-stone-900'
+            }`}
+            style={selectedVoiceFilter === 'S' ? { backgroundColor: '#E9DC00' } : undefined}
+          >
+            Сопрано
+          </button>
+          <button
+            onClick={() => setSelectedVoiceFilter('A')}
+            className={`py-2 px-1 rounded-lg font-medium transition-all ${
+              selectedVoiceFilter === 'A'
+                ? 'shadow-xs font-bold text-stone-950'
+                : 'text-stone-600 dark:text-stone-400 hover:text-stone-900'
+            }`}
+            style={selectedVoiceFilter === 'A' ? { backgroundColor: '#E9DC00' } : undefined}
+          >
+            Альт
+          </button>
+          <button
+            onClick={() => setSelectedVoiceFilter('T')}
+            className={`py-2 px-1 rounded-lg font-medium transition-all ${
+              selectedVoiceFilter === 'T'
+                ? 'shadow-xs font-bold text-stone-950'
+                : 'text-stone-600 dark:text-stone-400 hover:text-stone-900'
+            }`}
+            style={selectedVoiceFilter === 'T' ? { backgroundColor: '#E9DC00' } : undefined}
+          >
+            Тенор
+          </button>
+          <button
+            onClick={() => setSelectedVoiceFilter('B')}
+            className={`py-2 px-1 rounded-lg font-medium transition-all ${
+              selectedVoiceFilter === 'B'
+                ? 'shadow-xs font-bold text-stone-950'
+                : 'text-stone-600 dark:text-stone-400 hover:text-stone-900'
+            }`}
+            style={selectedVoiceFilter === 'B' ? { backgroundColor: '#E9DC00' } : undefined}
+          >
+            Бас
+          </button>
         </div>
 
         {/* Mastered Quick Drawer */}
         {showMasteredList && (
-          <div className="pt-2 border-t border-slate-100 dark:border-slate-800 text-xs space-y-2">
+          <div className="pt-2 border-t border-stone-100 dark:border-stone-800 text-xs space-y-2">
             <div className="flex items-center justify-between">
-              <span className="font-semibold text-slate-700 dark:text-slate-300">
+              <span className="font-semibold text-stone-700 dark:text-stone-300">
                 Изученные гласы:
               </span>
               <button
@@ -335,13 +369,13 @@ export const TrainerTab: React.FC<TrainerTabProps> = ({
                   (masteredByVoice[selectedVoiceFilter] || []).map((g) => (
                     <span
                       key={g}
-                      className="px-2 py-0.5 bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 text-emerald-700 dark:text-emerald-300 rounded-md font-mono text-[11px]"
+                      className="px-2 py-0.5 border text-stone-900 dark:text-stone-100 rounded-md font-mono text-[11px] font-semibold bg-[#AFE800]/15 dark:bg-[#AFE800]/10 border-[#AFE800]/60"
                     >
                       Глас {g}
                     </span>
                   ))
                 ) : (
-                  <span className="text-slate-400 italic">Пока нет изученных гласов</span>
+                  <span className="text-stone-400 italic">Пока нет изученных гласов</span>
                 )
               ) : (
                 (['S', 'A', 'T', 'B'] as const).map((v) => {
@@ -350,9 +384,9 @@ export const TrainerTab: React.FC<TrainerTabProps> = ({
                   return (
                     <span
                       key={v}
-                      className="px-2 py-0.5 bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 rounded-md text-[11px]"
+                      className="px-2 py-0.5 bg-stone-100 dark:bg-stone-800 text-stone-700 dark:text-stone-300 rounded-md text-[11px]"
                     >
-                      {v}: {list.join(', ')}
+                      {VOICE_LABELS[v].short}: {list.join(', ')}
                     </span>
                   );
                 })
@@ -364,19 +398,23 @@ export const TrainerTab: React.FC<TrainerTabProps> = ({
 
       {/* Screen when all glas for this voice are marked as known */}
       {allMastered ? (
-        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl p-8 text-center space-y-4 shadow-xs">
-          <div className="w-14 h-14 mx-auto rounded-full bg-emerald-100 dark:bg-emerald-900/50 flex items-center justify-center text-emerald-600 dark:text-emerald-400">
+        <div className="bg-white dark:bg-stone-900/90 border border-stone-200/80 dark:border-stone-800/80 rounded-3xl p-8 text-center space-y-4 shadow-xs">
+          <div
+            className="w-14 h-14 mx-auto rounded-full flex items-center justify-center text-stone-950 border-2"
+            style={{ backgroundColor: 'rgba(175, 232, 0, 0.75)', borderColor: '#AFE800' }}
+          >
             <Sparkles className="w-7 h-7" />
           </div>
-          <h3 className="text-xl font-bold font-ecclesiastical text-slate-900 dark:text-slate-100">
+          <h3 className="text-xl font-bold font-ecclesiastical text-stone-900 dark:text-stone-100">
             Все гласы изучены!
           </h3>
-          <p className="text-xs text-slate-500 dark:text-slate-400">
+          <p className="text-xs text-stone-500 dark:text-stone-400">
             Вы отметили все доступные гласы кнопкой «Знаю!». Чтобы повторить их заново, нажмите кнопку ниже:
           </p>
           <button
             onClick={() => handleResetMastered(selectedVoiceFilter === 'ANY' ? undefined : selectedVoiceFilter)}
-            className="px-5 py-2.5 bg-slate-900 text-white dark:bg-slate-100 dark:text-slate-900 rounded-xl text-xs font-semibold hover:bg-slate-800 transition-all shadow-md"
+            className="px-5 py-2.5 rounded-xl text-xs font-bold text-stone-950 transition-all shadow-md hover:brightness-95 active:scale-95"
+            style={{ backgroundColor: '#E9DC00' }}
           >
             Сбросить и начать заново
           </button>
@@ -384,29 +422,30 @@ export const TrainerTab: React.FC<TrainerTabProps> = ({
       ) : (
         <>
           {/* Main Audio Player Card */}
-          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl p-5 text-center shadow-xs space-y-4">
+          <div className="bg-white dark:bg-stone-900/90 border border-stone-200/80 dark:border-stone-800/80 rounded-3xl p-5 text-center shadow-xs space-y-4">
             
             {/* Voice Info & Cycle counter */}
-            <div className="flex items-center justify-between text-xs text-slate-500 dark:text-slate-400">
-              <span className="font-semibold text-slate-800 dark:text-slate-200">
+            <div className="flex items-center justify-between text-xs text-stone-500 dark:text-stone-400">
+              <span className="font-semibold text-stone-800 dark:text-stone-200">
                 {currentQuestion
-                  ? `Партия: ${VOICE_LABELS[currentQuestion.voice].full} (${currentQuestion.voice})`
+                  ? `Партия: ${VOICE_LABELS[currentQuestion.voice].full}`
                   : ''}
               </span>
-              <span className="font-mono text-[11px] tabular-nums">
-                В цикле осталось: {roundPool.length + 1}
+              <span className="font-mono text-[11px] tabular-nums text-stone-400">
+                В круге: {roundPool.length + 1}
               </span>
             </div>
 
-            {/* Play Button */}
+            {/* Play Button colored with #E9DC00 */}
             <div className="py-2 flex flex-col items-center justify-center">
               <button
-                onClick={handleReplay}
-                className={`w-24 h-24 rounded-full flex items-center justify-center transition-all transform active:scale-95 shadow-md ${
+                onClick={handlePlayToggle}
+                className={`w-24 h-24 rounded-full flex items-center justify-center transition-all transform active:scale-95 shadow-md text-stone-950 ${
                   playerState.isPlaying
-                    ? 'bg-amber-600 text-white ring-8 ring-amber-500/20 animate-pulse'
-                    : 'bg-slate-900 dark:bg-slate-100 text-white dark:text-slate-900 hover:scale-105'
+                    ? 'ring-8 ring-[#E9DC00]/30 animate-pulse'
+                    : 'hover:brightness-95 hover:scale-105'
                 }`}
+                style={{ backgroundColor: '#E9DC00' }}
                 aria-label={playerState.isPlaying ? 'Звучит запев' : 'Воспроизвести'}
               >
                 {playerState.isPlaying ? (
@@ -415,20 +454,20 @@ export const TrainerTab: React.FC<TrainerTabProps> = ({
                   <Play className="w-10 h-10 fill-current translate-x-0.5" />
                 )}
               </button>
-              <p className="text-xs font-medium text-slate-500 dark:text-slate-400 mt-2.5">
+              <p className="text-xs font-medium text-stone-500 dark:text-stone-400 mt-2.5">
                 {playerState.isPlaying ? 'Звучит запев...' : 'Слушать запев'}
               </p>
             </div>
 
-            {/* "Знаю!" Button (Quick Skip) */}
-            <div className="flex justify-center pt-1 border-t border-slate-100 dark:border-slate-800">
+            {/* "Знаю! Больше не спрашивать" Button with same fill as "Верно!" field */}
+            <div className="flex justify-center pt-1 border-t border-stone-100 dark:border-stone-800">
               <button
                 onClick={handleMarkAsKnown}
                 disabled={!currentQuestion}
-                className="flex items-center gap-1.5 px-4 py-1.5 text-xs font-medium text-emerald-700 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/40 hover:bg-emerald-100 dark:hover:bg-emerald-950/70 border border-emerald-200 dark:border-emerald-800/60 rounded-xl transition-all active:scale-95"
+                className="flex items-center gap-1.5 px-5 py-2 text-xs font-bold rounded-xl transition-all shadow-xs hover:bg-[#AFE800]/25 active:scale-95 border border-[#AFE800] bg-[#AFE800]/15 dark:bg-[#AFE800]/10 text-stone-900 dark:text-stone-100"
                 title="Отметить этот глас как хорошо известный, чтобы больше не тренировать его"
               >
-                <CheckCircle className="w-3.5 h-3.5" />
+                <CheckCircle className="w-4 h-4 text-stone-900 dark:text-[#AFE800]" />
                 <span>Знаю! Больше не спрашивать</span>
               </button>
             </div>
@@ -437,7 +476,7 @@ export const TrainerTab: React.FC<TrainerTabProps> = ({
 
           {/* 8 Big Glas Action Buttons */}
           <div className="space-y-2">
-            <span className="block text-xs font-semibold text-slate-600 dark:text-slate-400 px-1">
+            <span className="block text-xs font-semibold text-stone-600 dark:text-stone-400 px-1">
               Выберите глас:
             </span>
 
@@ -446,16 +485,18 @@ export const TrainerTab: React.FC<TrainerTabProps> = ({
                 const isSelected = selectedAnswer === glas;
                 const isCorrectTarget = currentQuestion?.glas === glas;
 
-                let btnStyle =
-                  'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 text-slate-800 dark:text-slate-200 hover:border-slate-400 dark:hover:border-slate-600 active:scale-95';
+                let customStyle: React.CSSProperties | undefined = undefined;
+                let btnClass =
+                  'bg-white dark:bg-stone-900/90 border-stone-200 dark:border-stone-800 text-stone-800 dark:text-stone-200 hover:border-[#E9DC00] hover:bg-[#E9DC00]/10 active:scale-95';
 
                 if (isAnswered) {
                   if (isCorrectTarget) {
-                    btnStyle = 'bg-emerald-600 text-white border-emerald-600 shadow-md ring-2 ring-emerald-500/20';
+                    customStyle = { backgroundColor: '#AFE800', borderColor: '#AFE800' };
+                    btnClass = 'text-stone-950 shadow-md ring-2 ring-[#AFE800]/40 font-bold';
                   } else if (isSelected && !isCorrectTarget) {
-                    btnStyle = 'bg-rose-600 text-white border-rose-600 shadow-md ring-2 ring-rose-500/20';
+                    btnClass = 'bg-rose-600 text-white border-rose-600 shadow-md ring-2 ring-rose-500/20';
                   } else {
-                    btnStyle = 'opacity-35 bg-slate-50 dark:bg-slate-900/40 border-slate-200 dark:border-slate-800 text-slate-400';
+                    btnClass = 'opacity-35 bg-stone-50 dark:bg-stone-900/40 border-stone-200 dark:border-stone-800 text-stone-400';
                   }
                 }
 
@@ -464,9 +505,10 @@ export const TrainerTab: React.FC<TrainerTabProps> = ({
                     key={glas}
                     disabled={isAnswered}
                     onClick={() => handleSelectGlas(glas)}
-                    className={`h-16 rounded-2xl border text-center transition-all flex flex-col items-center justify-center p-1 shadow-xs ${btnStyle}`}
+                    className={`h-16 rounded-2xl border text-center transition-all flex flex-col items-center justify-center p-1 shadow-xs ${btnClass}`}
+                    style={customStyle}
                   >
-                    <span className="text-[10px] uppercase opacity-70 leading-none">
+                    <span className="text-[10px] uppercase opacity-75 leading-none">
                       Глас
                     </span>
                     <span className="text-2xl font-bold font-ecclesiastical leading-none mt-1">
@@ -483,13 +525,16 @@ export const TrainerTab: React.FC<TrainerTabProps> = ({
             <div
               className={`rounded-2xl p-4 border transition-all space-y-3 ${
                 feedback.isCorrect
-                  ? 'bg-emerald-50 dark:bg-emerald-950/40 border-emerald-200 dark:border-emerald-800'
-                  : 'bg-rose-50 dark:bg-rose-950/40 border-rose-200 dark:border-rose-800'
+                  ? 'bg-[#AFE800]/15 dark:bg-[#AFE800]/10 border-[#AFE800]/50'
+                  : 'bg-rose-50/90 dark:bg-rose-950/40 border-rose-200 dark:border-rose-800'
               }`}
             >
               <div className="flex items-center gap-2">
                 {feedback.isCorrect ? (
-                  <div className="w-6 h-6 rounded-full bg-emerald-600 text-white flex items-center justify-center shrink-0">
+                  <div
+                    className="w-6 h-6 rounded-full flex items-center justify-center shrink-0 text-stone-950"
+                    style={{ backgroundColor: '#AFE800' }}
+                  >
                     <Check className="w-4 h-4 stroke-[3]" />
                   </div>
                 ) : (
@@ -497,26 +542,25 @@ export const TrainerTab: React.FC<TrainerTabProps> = ({
                     <X className="w-4 h-4 stroke-[3]" />
                   </div>
                 )}
-                <span className="text-base font-bold font-ecclesiastical text-slate-900 dark:text-slate-100">
+                <span className="text-base font-bold font-ecclesiastical text-stone-900 dark:text-stone-100">
                   {feedback.message}
                 </span>
               </div>
 
               {/* Action buttons */}
               <div className="flex flex-col sm:flex-row gap-2 pt-1">
-                {/* Play Full Choir (ALL-N.mp3) */}
                 <button
                   onClick={handlePlayAllVoices}
-                  className="flex-1 flex items-center justify-center gap-1.5 py-2.5 px-3 bg-purple-700 hover:bg-purple-800 text-white text-xs font-semibold rounded-xl shadow-xs transition-colors whitespace-nowrap active:scale-95"
+                  className="flex-1 flex items-center justify-center gap-1.5 py-2.5 px-3 bg-violet-700 hover:bg-violet-800 text-white text-xs font-semibold rounded-xl shadow-xs transition-colors whitespace-nowrap active:scale-95"
                 >
                   <Users className="w-4 h-4" />
                   <span>Прослушать всеми партиями (весь хор)</span>
                 </button>
 
-                {/* Next Question */}
                 <button
                   onClick={handleNextQuestion}
-                  className="flex-1 flex items-center justify-center gap-1.5 py-2.5 px-4 bg-slate-900 hover:bg-slate-800 dark:bg-slate-100 dark:text-slate-900 text-white text-xs font-semibold rounded-xl shadow-xs transition-colors whitespace-nowrap active:scale-95"
+                  className="flex-1 flex items-center justify-center gap-1.5 py-2.5 px-4 rounded-xl text-xs font-bold text-stone-950 shadow-xs transition-all whitespace-nowrap hover:brightness-95 active:scale-95"
+                  style={{ backgroundColor: '#E9DC00' }}
                 >
                   <span>Следующий запев</span>
                   <ArrowRight className="w-4 h-4" />
@@ -527,28 +571,31 @@ export const TrainerTab: React.FC<TrainerTabProps> = ({
         </>
       )}
 
-      {/* Compact Mobile Scoreboard Bar */}
-      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-3 shadow-xs flex items-center justify-around text-center text-xs">
+      {/* Compact Mobile Scoreboard Bar with #AFE800 for correct answers digits */}
+      <div className="bg-white dark:bg-stone-900/90 border border-stone-200/80 dark:border-stone-800/80 rounded-2xl p-3 shadow-xs flex items-center justify-around text-center text-xs">
         <div>
-          <span className="text-[11px] text-slate-500 block">Правильно</span>
-          <span className="text-base font-bold font-mono text-emerald-600 dark:text-emerald-400 tabular-nums">
+          <span className="text-[11px] text-stone-500 block">Правильно</span>
+          <span
+            className="text-lg font-bold font-mono tabular-nums inline-block mt-0.5"
+            style={{ color: '#AFE800' }}
+          >
             {stats.correctAnswers}
           </span>
         </div>
-        <div className="h-6 w-px bg-slate-200 dark:bg-slate-800" />
+        <div className="h-6 w-px bg-stone-200 dark:bg-stone-800" />
         <div>
-          <span className="text-[11px] text-slate-500 block">Ошибок</span>
-          <span className="text-base font-bold font-mono text-rose-600 dark:text-rose-400 tabular-nums">
+          <span className="text-[11px] text-stone-500 block">Ошибок</span>
+          <span className="text-lg font-bold font-mono text-rose-600 dark:text-rose-400 tabular-nums inline-block mt-0.5">
             {stats.incorrectAnswers}
           </span>
         </div>
-        <div className="h-6 w-px bg-slate-200 dark:bg-slate-800" />
+        <div className="h-6 w-px bg-stone-200 dark:bg-stone-800" />
         <div className="flex flex-col items-center">
-          <span className="text-[11px] text-slate-500 flex items-center gap-1">
-            <Flame className="w-3 h-3 text-amber-500" />
+          <span className="text-[11px] text-stone-500 flex items-center gap-1">
+            <Flame className="w-3 h-3 text-[#E9DC00]" />
             <span>Серия</span>
           </span>
-          <span className="text-base font-bold font-mono text-amber-600 dark:text-amber-400 tabular-nums">
+          <span className="text-lg font-bold font-mono text-stone-800 dark:text-stone-200 tabular-nums inline-block mt-0.5">
             {stats.currentStreak}
           </span>
         </div>

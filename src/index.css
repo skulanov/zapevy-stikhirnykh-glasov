@@ -4,9 +4,13 @@
 @layer base {
   body {
     font-family: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
   }
   
   .font-ecclesiastical {
     font-family: 'Cormorant Garamond', Georgia, serif;
+    letter-spacing: 0.02em;
   }
 }
+
