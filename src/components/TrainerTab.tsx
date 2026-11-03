@@ -3,115 +3,186 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   Play,
-  RotateCcw,
-  Check,
-  X,
   Volume2,
   Users,
-  Award,
-  Sparkles,
+  Check,
+  X,
   ArrowRight,
   Flame,
-  HelpCircle,
-  BookOpen,
-  Settings2
+  CheckCircle,
+  RotateCcw,
+  Sparkles
 } from 'lucide-react';
 import { audioManager, PlayerState } from '../services/audioManager';
-import { GLAS_DATA, GLAS_LIST, VOICE_LABELS } from '../data/glasData';
-import { GlasNumber, QuizQuestion, QuizStats, VoiceFilter, VoiceType } from '../types/chant';
+import { GLAS_LIST, VOICE_LABELS } from '../data/glasData';
+import { GlasNumber, MasteredByVoice, QuizQuestion, QuizStats, VoiceFilter, VoiceType } from '../types/chant';
 
 interface TrainerTabProps {
   stats: QuizStats;
   onUpdateStats: (newStats: QuizStats) => void;
-  onOpenStudyGlas: (glas: GlasNumber) => void;
-  onOpenAudioModal: () => void;
+  masteredByVoice: MasteredByVoice;
+  onUpdateMastered: (newMastered: MasteredByVoice) => void;
 }
 
 export const TrainerTab: React.FC<TrainerTabProps> = ({
   stats,
   onUpdateStats,
-  onOpenStudyGlas,
-  onOpenAudioModal,
+  masteredByVoice,
+  onUpdateMastered,
 }) => {
   const [selectedVoiceFilter, setSelectedVoiceFilter] = useState<VoiceFilter>('ANY');
   const [currentQuestion, setCurrentQuestion] = useState<QuizQuestion | null>(null);
   const [playerState, setPlayerState] = useState<PlayerState>(audioManager.getState());
-  const [autoAdvance, setAutoAdvance] = useState(false);
-  const [showVoiceHint, setShowVoiceHint] = useState(true);
   const [isAnswered, setIsAnswered] = useState(false);
   const [selectedAnswer, setSelectedAnswer] = useState<GlasNumber | null>(null);
-  const [lastFeedback, setLastFeedback] = useState<{ isCorrect: boolean; message: string } | null>(null);
-  const autoAdvanceTimerRef = useRef<number | null>(null);
+  const [feedback, setFeedback] = useState<{ isCorrect: boolean; message: string } | null>(null);
+  
+  // Track glas remaining in current non-repeating 8-glas cycle
+  const [roundPool, setRoundPool] = useState<GlasNumber[]>([]);
+  const [showMasteredList, setShowMasteredList] = useState(false);
 
-  // Subscribe to audio manager state
   useEffect(() => {
     return audioManager.subscribe((st) => {
       setPlayerState(st);
     });
   }, []);
 
-  // Generate a new random question
-  const generateNewQuestion = useCallback((filter: VoiceFilter): QuizQuestion => {
+  // Compute available unmastered glas for the currently selected voice filter
+  const getAvailableGlasForVoice = useCallback((voice: 'S' | 'A' | 'T' | 'B'): GlasNumber[] => {
+    const mastered = masteredByVoice[voice] || [];
+    return GLAS_LIST.filter((g) => !mastered.includes(g));
+  }, [masteredByVoice]);
+
+  // All available options for the active filter
+  const availablePoolForFilter = useMemo(() => {
+    if (selectedVoiceFilter === 'ANY') {
+      // Any glas that is not mastered in ALL voices
+      const allActiveVoices: Array<'S' | 'A' | 'T' | 'B'> = ['S', 'A', 'T', 'B'];
+      const candidates: GlasNumber[] = [];
+      for (const g of GLAS_LIST) {
+        const hasUnmasteredVoice = allActiveVoices.some(
+          (v) => !(masteredByVoice[v] || []).includes(g)
+        );
+        if (hasUnmasteredVoice) {
+          candidates.push(g);
+        }
+      }
+      return candidates;
+    } else {
+      return getAvailableGlasForVoice(selectedVoiceFilter);
+    }
+  }, [selectedVoiceFilter, masteredByVoice, getAvailableGlasForVoice]);
+
+  // Next question generator with non-repeating cycle
+  const pickNextQuestion = useCallback((currentPool: GlasNumber[], filter: VoiceFilter) => {
     const validVoices: Array<'S' | 'A' | 'T' | 'B'> =
       filter === 'ANY' ? ['S', 'A', 'T', 'B'] : [filter];
-    const randomVoice = validVoices[Math.floor(Math.random() * validVoices.length)];
-    const randomGlas = GLAS_LIST[Math.floor(Math.random() * GLAS_LIST.length)];
 
-    return {
-      id: `${Date.now()}-${Math.random()}`,
-      glas: randomGlas,
-      voice: randomVoice,
-      selectedVoiceFilter: filter,
-      audioFilename: `${randomVoice}-${randomGlas}.mp3`,
-      allVoiceFilename: `ALL-${randomGlas}.mp3`,
-    };
-  }, []);
+    // Determine candidate pool
+    let activePool = currentPool;
+    const baseAvailable = filter === 'ANY'
+      ? GLAS_LIST.filter(g => validVoices.some(v => !(masteredByVoice[v] || []).includes(g)))
+      : GLAS_LIST.filter(g => !(masteredByVoice[filter] || []).includes(g));
 
-  // Start question or next
-  const startNextQuestion = useCallback((filter = selectedVoiceFilter) => {
-    if (autoAdvanceTimerRef.current !== null) {
-      clearTimeout(autoAdvanceTimerRef.current);
-      autoAdvanceTimerRef.current = null;
+    if (baseAvailable.length === 0) {
+      setCurrentQuestion(null);
+      return;
     }
-    const q = generateNewQuestion(filter);
-    setCurrentQuestion(q);
+
+    if (activePool.length === 0) {
+      // Refill pool for new cycle
+      activePool = [...baseAvailable];
+    }
+
+    // Pick a random glas from the remaining pool
+    const randomIndex = Math.floor(Math.random() * activePool.length);
+    const chosenGlas = activePool[randomIndex];
+    const newPool = activePool.filter((_, idx) => idx !== randomIndex);
+
+    // Pick a voice that hasn't mastered this glas
+    const unmasteredVoices = validVoices.filter(
+      (v) => !(masteredByVoice[v] || []).includes(chosenGlas)
+    );
+    const chosenVoice =
+      unmasteredVoices.length > 0
+        ? unmasteredVoices[Math.floor(Math.random() * unmasteredVoices.length)]
+        : validVoices[Math.floor(Math.random() * validVoices.length)];
+
+    setRoundPool(newPool);
+
+    const question: QuizQuestion = {
+      id: `${Date.now()}-${Math.random()}`,
+      glas: chosenGlas,
+      voice: chosenVoice,
+      selectedVoiceFilter: filter,
+      audioFilename: `${chosenVoice}-${chosenGlas}.mp3`,
+      allVoiceFilename: `ALL-${chosenGlas}.mp3`,
+    };
+
+    setCurrentQuestion(question);
     setIsAnswered(false);
     setSelectedAnswer(null);
-    setLastFeedback(null);
+    setFeedback(null);
 
-    // Play sound for the new question
-    audioManager.play(q.voice, q.glas);
-  }, [generateNewQuestion, selectedVoiceFilter]);
+    // Start playback
+    audioManager.play(question.voice, question.glas);
+  }, [masteredByVoice]);
 
-  // Initial setup on mount
+  // Start question on mount or when filter changes
   useEffect(() => {
-    if (!currentQuestion) {
-      startNextQuestion();
-    }
-  }, [currentQuestion, startNextQuestion]);
+    pickNextQuestion([], selectedVoiceFilter);
+  }, [selectedVoiceFilter, pickNextQuestion]);
 
-  // Change voice filter
-  const handleVoiceFilterChange = (filter: VoiceFilter) => {
-    setSelectedVoiceFilter(filter);
-    startNextQuestion(filter);
+  const handleNextQuestion = () => {
+    pickNextQuestion(roundPool, selectedVoiceFilter);
   };
 
-  // Replay current clip
   const handleReplay = () => {
     if (!currentQuestion) return;
     audioManager.play(currentQuestion.voice, currentQuestion.glas);
   };
 
-  // Play full choir version for comparison
   const handlePlayAllVoices = () => {
     if (!currentQuestion) return;
     audioManager.play('ALL', currentQuestion.glas);
   };
 
-  // Handle user's answer click
+  // Mark current glas as "Знаю!"
+  const handleMarkAsKnown = () => {
+    if (!currentQuestion) return;
+    const voice = currentQuestion.voice;
+    const glas = currentQuestion.glas;
+
+    const currentList = masteredByVoice[voice] || [];
+    if (!currentList.includes(glas)) {
+      const updatedList = [...currentList, glas];
+      const updatedMastered = {
+        ...masteredByVoice,
+        [voice]: updatedList,
+      };
+      onUpdateMastered(updatedMastered);
+    }
+
+    // Move to next question right away
+    handleNextQuestion();
+  };
+
+  // Reset mastered glas for current voice
+  const handleResetMastered = (voice?: 'S' | 'A' | 'T' | 'B') => {
+    if (voice) {
+      const updated = { ...masteredByVoice, [voice]: [] };
+      onUpdateMastered(updated);
+    } else {
+      onUpdateMastered({ S: [], A: [], T: [], B: [] });
+    }
+    setRoundPool([]);
+    setTimeout(() => pickNextQuestion([], selectedVoiceFilter), 50);
+  };
+
+  // Handle user answer
   const handleSelectGlas = (glas: GlasNumber) => {
     if (!currentQuestion || isAnswered) return;
 
@@ -163,175 +234,180 @@ export const TrainerTab: React.FC<TrainerTabProps> = ({
     onUpdateStats(newStats);
 
     if (isCorrect) {
-      setLastFeedback({
+      setFeedback({
         isCorrect: true,
-        message: `Верно! Это ${GLAS_DATA[currentQuestion.glas].title}.`,
+        message: `Верно! Это Глас ${currentQuestion.glas}.`,
       });
     } else {
-      setLastFeedback({
+      setFeedback({
         isCorrect: false,
-        message: `Ошибка. Вы выбрали Глас ${glas}, но это ${GLAS_DATA[currentQuestion.glas].title}.`,
+        message: `Ошибка. Это Глас ${currentQuestion.glas}.`,
       });
-    }
-
-    if (autoAdvance) {
-      autoAdvanceTimerRef.current = window.setTimeout(() => {
-        startNextQuestion();
-      }, 3500);
     }
   };
 
-  // Keyboard shortcut listener (Keys 1-8 for glas, Space for replay, Enter for next)
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      // Ignore if user is inside an input
-      if (['INPUT', 'TEXTAREA'].includes((e.target as HTMLElement)?.tagName)) return;
+  const totalMasteredCurrentVoice = useMemo(() => {
+    if (selectedVoiceFilter === 'ANY') {
+      const all = new Set<string>();
+      (['S', 'A', 'T', 'B'] as const).forEach((v) => {
+        (masteredByVoice[v] || []).forEach((g) => all.add(`${v}-${g}`));
+      });
+      return all.size; // out of 32
+    } else {
+      return (masteredByVoice[selectedVoiceFilter] || []).length; // out of 8
+    }
+  }, [selectedVoiceFilter, masteredByVoice]);
 
-      const num = parseInt(e.key, 10);
-      if (num >= 1 && num <= 8) {
-        e.preventDefault();
-        handleSelectGlas(num as GlasNumber);
-      } else if (e.code === 'Space') {
-        e.preventDefault();
-        if (isAnswered) {
-          startNextQuestion();
-        } else {
-          handleReplay();
-        }
-      } else if (e.code === 'Enter') {
-        e.preventDefault();
-        startNextQuestion();
-      }
-    };
-
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  });
-
-  const accuracy =
-    stats.totalQuestions > 0
-      ? Math.round((stats.correctAnswers / stats.totalQuestions) * 100)
-      : 0;
-
-  const currentGlasData = currentQuestion ? GLAS_DATA[currentQuestion.glas] : null;
+  const maxTotalForFilter = selectedVoiceFilter === 'ANY' ? 32 : 8;
+  const allMastered = availablePoolForFilter.length === 0;
 
   return (
-    <div className="space-y-6">
+    <div className="max-w-xl mx-auto space-y-4">
       
-      {/* Voice Mode Selector & Settings Toolbar */}
-      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 shadow-xs">
-        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-          
-          {/* Voice Part Selector */}
-          <div className="flex flex-col sm:flex-row sm:items-center gap-2">
-            <span className="text-xs font-semibold text-slate-500 dark:text-slate-400 whitespace-nowrap">
-              Партия для тренировки:
-            </span>
-            <div className="flex flex-wrap items-center gap-1.5 p-1 bg-slate-100 dark:bg-slate-800 rounded-xl">
-              <button
-                onClick={() => handleVoiceFilterChange('ANY')}
-                className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-all whitespace-nowrap ${
-                  selectedVoiceFilter === 'ANY'
-                    ? 'bg-white dark:bg-slate-700 text-slate-900 dark:text-slate-100 shadow-xs'
-                    : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
-                }`}
-              >
-                Все партии (случайно)
-              </button>
-              {(['S', 'A', 'T', 'B'] as const).map((v) => (
-                <button
-                  key={v}
-                  onClick={() => handleVoiceFilterChange(v)}
-                  className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-all whitespace-nowrap ${
-                    selectedVoiceFilter === v
-                      ? 'bg-white dark:bg-slate-700 text-slate-900 dark:text-slate-100 shadow-xs font-semibold'
-                      : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
-                  }`}
-                >
-                  {VOICE_LABELS[v].full} ({v})
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {/* Secondary Controls & Shortcuts */}
-          <div className="flex items-center gap-3 self-end sm:self-auto">
-            <button
-              onClick={() => setAutoAdvance(!autoAdvance)}
-              className={`flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-lg border transition-colors whitespace-nowrap ${
-                autoAdvance
-                  ? 'bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border-emerald-300 dark:border-emerald-800'
-                  : 'bg-transparent text-slate-500 border-slate-200 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800'
-              }`}
-              title="Автоматический переход к следующему вопросу через 3 секунды"
-            >
-              <RotateCcw className="w-3.5 h-3.5" />
-              <span>Авто-переход</span>
-            </button>
-
-            <button
-              onClick={() => setShowVoiceHint(!showVoiceHint)}
-              className={`text-xs px-2.5 py-1.5 rounded-lg border transition-colors whitespace-nowrap ${
-                showVoiceHint
-                  ? 'bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200 border-slate-300 dark:border-slate-700'
-                  : 'text-slate-400 border-slate-200 dark:border-slate-800 hover:bg-slate-50'
-              }`}
-              title="Показывать название звучащей партии"
-            >
-              {showVoiceHint ? 'Подсказка партии: Вкл' : 'Подсказка: Скрыта'}
-            </button>
-          </div>
-        </div>
+      {/* Prominent Canonical Zapev Text */}
+      <div className="bg-amber-500/10 dark:bg-amber-400/10 border border-amber-500/30 dark:border-amber-400/20 rounded-2xl py-3 px-4 text-center shadow-xs">
+        <span className="text-[11px] font-medium text-amber-700 dark:text-amber-400 uppercase tracking-wider block mb-0.5">
+          Запев стихиры:
+        </span>
+        <p className="text-xl sm:text-2xl font-bold font-ecclesiastical text-slate-900 dark:text-slate-100 tracking-wide">
+          «Испове́датися И́мени Твоему́»
+        </p>
       </div>
 
-      {/* Main Interactive Stage */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-        
-        {/* Left Column: Player & 8-Glas Choice Buttons */}
-        <div className="lg:col-span-8 space-y-6">
-          
-          {/* Audio Playback Card */}
-          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl p-6 sm:p-8 text-center relative overflow-hidden shadow-xs">
-            
-            {/* Top metadata indicators */}
-            <div className="flex items-center justify-between text-xs text-slate-500 dark:text-slate-400 mb-6">
-              <div className="flex items-center gap-2">
-                {currentQuestion && showVoiceHint && (
-                  <span className="font-medium text-slate-700 dark:text-slate-300">
-                    Звучит партия: <strong className="text-slate-900 dark:text-white">{VOICE_LABELS[currentQuestion.voice].full}</strong> ({currentQuestion.voice})
-                  </span>
-                )}
-                {currentQuestion && !showVoiceHint && (
-                  <span className="italic text-slate-400">Партия скрыта (сложный режим)</span>
-                )}
-              </div>
+      {/* Voice Part Selector (Mobile-friendly segmented pills) */}
+      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-2.5 shadow-xs space-y-2">
+        <div className="flex items-center justify-between text-xs text-slate-500 dark:text-slate-400 px-1">
+          <span className="font-medium">Партия:</span>
+          {/* Mastered count badge */}
+          <button
+            onClick={() => setShowMasteredList(!showMasteredList)}
+            className="text-[11px] text-amber-600 dark:text-amber-400 font-medium hover:underline flex items-center gap-1"
+          >
+            <CheckCircle className="w-3.5 h-3.5" />
+            <span>Изучено: {totalMasteredCurrentVoice}/{maxTotalForFilter}</span>
+          </button>
+        </div>
 
-              {/* Source indicator */}
-              <div className="flex items-center gap-1.5">
-                {playerState.sourceType === 'synth' ? (
-                  <span className="inline-flex items-center gap-1 text-[11px] text-amber-600 dark:text-amber-400">
-                    <span className="w-2 h-2 rounded-full bg-amber-500"></span>
-                    Синтезатор обихода
-                  </span>
+        <div className="grid grid-cols-5 gap-1 p-1 bg-slate-100 dark:bg-slate-800 rounded-xl text-center text-xs">
+          <button
+            onClick={() => setSelectedVoiceFilter('ANY')}
+            className={`py-2 px-1 rounded-lg font-medium transition-all ${
+              selectedVoiceFilter === 'ANY'
+                ? 'bg-white dark:bg-slate-700 text-slate-900 dark:text-slate-100 shadow-xs font-semibold'
+                : 'text-slate-600 dark:text-slate-400'
+            }`}
+          >
+            Любая
+          </button>
+          {(['S', 'A', 'T', 'B'] as const).map((v) => (
+            <button
+              key={v}
+              onClick={() => setSelectedVoiceFilter(v)}
+              className={`py-2 px-1 rounded-lg font-medium transition-all ${
+                selectedVoiceFilter === v
+                  ? 'bg-white dark:bg-slate-700 text-slate-900 dark:text-slate-100 shadow-xs font-semibold'
+                  : 'text-slate-600 dark:text-slate-400'
+              }`}
+            >
+              {VOICE_LABELS[v].short}
+            </button>
+          ))}
+        </div>
+
+        {/* Mastered Quick Drawer */}
+        {showMasteredList && (
+          <div className="pt-2 border-t border-slate-100 dark:border-slate-800 text-xs space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="font-semibold text-slate-700 dark:text-slate-300">
+                Изученные гласы:
+              </span>
+              <button
+                onClick={() => handleResetMastered(selectedVoiceFilter === 'ANY' ? undefined : selectedVoiceFilter)}
+                className="text-[11px] text-rose-600 dark:text-rose-400 hover:underline flex items-center gap-1"
+              >
+                <RotateCcw className="w-3 h-3" />
+                <span>Сбросить</span>
+              </button>
+            </div>
+            <div className="flex flex-wrap gap-1.5">
+              {selectedVoiceFilter !== 'ANY' ? (
+                (masteredByVoice[selectedVoiceFilter] || []).length > 0 ? (
+                  (masteredByVoice[selectedVoiceFilter] || []).map((g) => (
+                    <span
+                      key={g}
+                      className="px-2 py-0.5 bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 text-emerald-700 dark:text-emerald-300 rounded-md font-mono text-[11px]"
+                    >
+                      Глас {g}
+                    </span>
+                  ))
                 ) : (
-                  <span className="inline-flex items-center gap-1 text-[11px] text-emerald-600 dark:text-emerald-400">
-                    <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
-                    Файл {currentQuestion?.audioFilename}
-                  </span>
-                )}
-              </div>
+                  <span className="text-slate-400 italic">Пока нет изученных гласов</span>
+                )
+              ) : (
+                (['S', 'A', 'T', 'B'] as const).map((v) => {
+                  const list = masteredByVoice[v] || [];
+                  if (list.length === 0) return null;
+                  return (
+                    <span
+                      key={v}
+                      className="px-2 py-0.5 bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 rounded-md text-[11px]"
+                    >
+                      {v}: {list.join(', ')}
+                    </span>
+                  );
+                })
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Screen when all glas for this voice are marked as known */}
+      {allMastered ? (
+        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl p-8 text-center space-y-4 shadow-xs">
+          <div className="w-14 h-14 mx-auto rounded-full bg-emerald-100 dark:bg-emerald-900/50 flex items-center justify-center text-emerald-600 dark:text-emerald-400">
+            <Sparkles className="w-7 h-7" />
+          </div>
+          <h3 className="text-xl font-bold font-ecclesiastical text-slate-900 dark:text-slate-100">
+            Все гласы изучены!
+          </h3>
+          <p className="text-xs text-slate-500 dark:text-slate-400">
+            Вы отметили все доступные гласы кнопкой «Знаю!». Чтобы повторить их заново, нажмите кнопку ниже:
+          </p>
+          <button
+            onClick={() => handleResetMastered(selectedVoiceFilter === 'ANY' ? undefined : selectedVoiceFilter)}
+            className="px-5 py-2.5 bg-slate-900 text-white dark:bg-slate-100 dark:text-slate-900 rounded-xl text-xs font-semibold hover:bg-slate-800 transition-all shadow-md"
+          >
+            Сбросить и начать заново
+          </button>
+        </div>
+      ) : (
+        <>
+          {/* Main Audio Player Card */}
+          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl p-5 text-center shadow-xs space-y-4">
+            
+            {/* Voice Info & Cycle counter */}
+            <div className="flex items-center justify-between text-xs text-slate-500 dark:text-slate-400">
+              <span className="font-semibold text-slate-800 dark:text-slate-200">
+                {currentQuestion
+                  ? `Партия: ${VOICE_LABELS[currentQuestion.voice].full} (${currentQuestion.voice})`
+                  : ''}
+              </span>
+              <span className="font-mono text-[11px] tabular-nums">
+                В цикле осталось: {roundPool.length + 1}
+              </span>
             </div>
 
-            {/* Central Play/Replay Sphere */}
-            <div className="my-6 flex flex-col items-center justify-center">
+            {/* Play Button */}
+            <div className="py-2 flex flex-col items-center justify-center">
               <button
                 onClick={handleReplay}
-                className={`relative w-24 h-24 sm:w-28 sm:h-28 rounded-full flex items-center justify-center transition-all transform active:scale-95 shadow-lg ${
+                className={`w-24 h-24 rounded-full flex items-center justify-center transition-all transform active:scale-95 shadow-md ${
                   playerState.isPlaying
-                    ? 'bg-amber-600 text-white shadow-amber-500/25 ring-8 ring-amber-500/15 animate-pulse'
-                    : 'bg-slate-900 dark:bg-slate-100 text-white dark:text-slate-900 shadow-slate-900/10 hover:scale-105'
+                    ? 'bg-amber-600 text-white ring-8 ring-amber-500/20 animate-pulse'
+                    : 'bg-slate-900 dark:bg-slate-100 text-white dark:text-slate-900 hover:scale-105'
                 }`}
-                title="Воспроизвести запев (Пробел)"
+                aria-label={playerState.isPlaying ? 'Звучит запев' : 'Воспроизвести'}
               >
                 {playerState.isPlaying ? (
                   <Volume2 className="w-10 h-10 animate-bounce" />
@@ -339,308 +415,145 @@ export const TrainerTab: React.FC<TrainerTabProps> = ({
                   <Play className="w-10 h-10 fill-current translate-x-0.5" />
                 )}
               </button>
-
-              <div className="mt-4">
-                <p className="text-sm font-semibold text-slate-900 dark:text-slate-100">
-                  {playerState.isPlaying ? 'Звучит запев...' : 'Слушать запев'}
-                </p>
-                <p className="text-xs text-slate-400 mt-0.5">
-                  Клавиша: <kbd className="px-1.5 py-0.5 bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded text-[11px] font-mono">Пробел</kbd>
-                </p>
-              </div>
-
-              {/* Sound Wave Animation Visualizer */}
-              <div className="flex items-center justify-center gap-1.5 mt-5 h-8">
-                {[40, 75, 55, 90, 60, 100, 70, 85, 45, 95, 65, 80, 50].map((h, i) => (
-                  <span
-                    key={i}
-                    style={{
-                      height: playerState.isPlaying ? `${h}%` : '20%',
-                      transition: 'height 0.15s ease',
-                    }}
-                    className={`w-1 rounded-full ${
-                      playerState.isPlaying
-                        ? 'bg-amber-500 dark:bg-amber-400'
-                        : 'bg-slate-200 dark:bg-slate-700'
-                    }`}
-                  />
-                ))}
-              </div>
-            </div>
-
-            {/* Playback Speed Switcher */}
-            <div className="flex items-center justify-center gap-2 pt-2 border-t border-slate-100 dark:border-slate-800">
-              <span className="text-xs text-slate-400">Скорость:</span>
-              {[0.75, 1.0, 1.25].map((speed) => (
-                <button
-                  key={speed}
-                  onClick={() => {
-                    audioManager.setSpeed(speed);
-                    handleReplay();
-                  }}
-                  className={`px-2 py-0.5 text-xs rounded-md transition-colors ${
-                    playerState.playbackRate === speed
-                      ? 'bg-slate-900 text-white dark:bg-slate-100 dark:text-slate-900 font-medium'
-                      : 'text-slate-500 hover:text-slate-900 dark:hover:text-slate-200'
-                  }`}
-                >
-                  {speed}x
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {/* Glas Selection Title */}
-          <div className="flex items-center justify-between">
-            <div>
-              <h2 className="text-lg font-bold font-ecclesiastical text-slate-900 dark:text-slate-100">
-                Определите глас (1–8):
-              </h2>
-              <p className="text-xs text-slate-500 dark:text-slate-400">
-                Нажмите кнопку или используйте цифры 1–8 на клавиатуре
+              <p className="text-xs font-medium text-slate-500 dark:text-slate-400 mt-2.5">
+                {playerState.isPlaying ? 'Звучит запев...' : 'Слушать запев'}
               </p>
             </div>
 
-            {isAnswered && (
+            {/* "Знаю!" Button (Quick Skip) */}
+            <div className="flex justify-center pt-1 border-t border-slate-100 dark:border-slate-800">
               <button
-                onClick={() => startNextQuestion()}
-                className="flex items-center gap-2 px-5 py-2.5 bg-slate-900 text-white dark:bg-slate-100 dark:text-slate-900 rounded-xl font-semibold text-sm hover:bg-slate-800 dark:hover:bg-white transition-all shadow-md active:scale-95 whitespace-nowrap"
+                onClick={handleMarkAsKnown}
+                disabled={!currentQuestion}
+                className="flex items-center gap-1.5 px-4 py-1.5 text-xs font-medium text-emerald-700 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/40 hover:bg-emerald-100 dark:hover:bg-emerald-950/70 border border-emerald-200 dark:border-emerald-800/60 rounded-xl transition-all active:scale-95"
+                title="Отметить этот глас как хорошо известный, чтобы больше не тренировать его"
               >
-                <span>Следующий запев</span>
-                <ArrowRight className="w-4 h-4" />
+                <CheckCircle className="w-3.5 h-3.5" />
+                <span>Знаю! Больше не спрашивать</span>
               </button>
-            )}
+            </div>
+
           </div>
 
           {/* 8 Big Glas Action Buttons */}
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 sm:gap-4">
-            {GLAS_LIST.map((glas) => {
-              const isSelected = selectedAnswer === glas;
-              const isCorrectTarget = currentQuestion?.glas === glas;
+          <div className="space-y-2">
+            <span className="block text-xs font-semibold text-slate-600 dark:text-slate-400 px-1">
+              Выберите глас:
+            </span>
 
-              let btnStyle =
-                'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 text-slate-800 dark:text-slate-200 hover:border-slate-400 dark:hover:border-slate-600 hover:shadow-md';
+            <div className="grid grid-cols-4 gap-2">
+              {GLAS_LIST.map((glas) => {
+                const isSelected = selectedAnswer === glas;
+                const isCorrectTarget = currentQuestion?.glas === glas;
 
-              if (isAnswered) {
-                if (isCorrectTarget) {
-                  // Correct answer: always bright green highlight!
-                  btnStyle =
-                    'bg-emerald-600 text-white border-emerald-600 ring-4 ring-emerald-500/20 shadow-lg';
-                } else if (isSelected && !isCorrectTarget) {
-                  // Chosen wrong answer: red highlight!
-                  btnStyle =
-                    'bg-rose-600 text-white border-rose-600 ring-4 ring-rose-500/20 shadow-lg';
-                } else {
-                  // Other unselected answers
-                  btnStyle = 'opacity-40 bg-slate-50 dark:bg-slate-900/40 border-slate-200 dark:border-slate-800 text-slate-400';
+                let btnStyle =
+                  'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 text-slate-800 dark:text-slate-200 hover:border-slate-400 dark:hover:border-slate-600 active:scale-95';
+
+                if (isAnswered) {
+                  if (isCorrectTarget) {
+                    btnStyle = 'bg-emerald-600 text-white border-emerald-600 shadow-md ring-2 ring-emerald-500/20';
+                  } else if (isSelected && !isCorrectTarget) {
+                    btnStyle = 'bg-rose-600 text-white border-rose-600 shadow-md ring-2 ring-rose-500/20';
+                  } else {
+                    btnStyle = 'opacity-35 bg-slate-50 dark:bg-slate-900/40 border-slate-200 dark:border-slate-800 text-slate-400';
+                  }
                 }
-              }
 
-              return (
-                <button
-                  key={glas}
-                  disabled={isAnswered}
-                  onClick={() => handleSelectGlas(glas)}
-                  className={`relative p-4 sm:p-5 rounded-2xl border text-center transition-all flex flex-col items-center justify-center gap-1 group active:scale-95 ${btnStyle}`}
-                >
-                  <span className="text-xs uppercase tracking-wider opacity-70 font-medium">
-                    Глас
-                  </span>
-                  <span className="text-3xl sm:text-4xl font-bold font-ecclesiastical leading-none">
-                    {glas}
-                  </span>
-                  <span className="text-[11px] opacity-60 font-mono mt-0.5">
-                    Клавиша [{glas}]
-                  </span>
-
-                  {/* Feedback indicator icon on button */}
-                  {isAnswered && isCorrectTarget && (
-                    <div className="absolute top-2 right-2 w-6 h-6 rounded-full bg-white text-emerald-600 flex items-center justify-center shadow-xs">
-                      <Check className="w-4 h-4 stroke-[3]" />
-                    </div>
-                  )}
-                  {isAnswered && isSelected && !isCorrectTarget && (
-                    <div className="absolute top-2 right-2 w-6 h-6 rounded-full bg-white text-rose-600 flex items-center justify-center shadow-xs">
-                      <X className="w-4 h-4 stroke-[3]" />
-                    </div>
-                  )}
-                </button>
-              );
-            })}
-          </div>
-
-          {/* Feedback & Educational Breakdown after Answer */}
-          {isAnswered && currentGlasData && (
-            <div
-              className={`rounded-2xl p-6 border transition-all animate-fadeIn ${
-                lastFeedback?.isCorrect
-                  ? 'bg-emerald-50/70 dark:bg-emerald-950/30 border-emerald-200 dark:border-emerald-800/60'
-                  : 'bg-amber-50/70 dark:bg-amber-950/30 border-amber-200 dark:border-amber-800/60'
-              }`}
-            >
-              <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-4">
-                <div className="space-y-2">
-                  <div className="flex items-center gap-2">
-                    {lastFeedback?.isCorrect ? (
-                      <div className="w-7 h-7 rounded-full bg-emerald-600 text-white flex items-center justify-center shrink-0">
-                        <Check className="w-4 h-4 stroke-[3]" />
-                      </div>
-                    ) : (
-                      <div className="w-7 h-7 rounded-full bg-rose-600 text-white flex items-center justify-center shrink-0">
-                        <X className="w-4 h-4 stroke-[3]" />
-                      </div>
-                    )}
-                    <h3 className="text-lg font-bold font-ecclesiastical text-slate-900 dark:text-slate-100">
-                      {lastFeedback?.message}
-                    </h3>
-                  </div>
-
-                  <p className="text-sm font-ecclesiastical italic text-slate-800 dark:text-slate-200 pl-9">
-                    {currentGlasData.primaryZapevText}
-                  </p>
-                  <p className="text-xs text-slate-500 dark:text-slate-400 pl-9">
-                    {currentGlasData.psalmCitation} · {currentGlasData.character}
-                  </p>
-                </div>
-
-                {/* Compare with Full Choir Button (ALL-N.mp3) */}
-                <div className="flex flex-col gap-2 shrink-0 sm:self-center">
-                  <button
-                    onClick={handlePlayAllVoices}
-                    className="flex items-center justify-center gap-2 px-4 py-2 bg-purple-700 hover:bg-purple-800 text-white text-xs font-semibold rounded-xl shadow-sm transition-all whitespace-nowrap active:scale-95"
-                    title="Прослушать этот глас в исполнении полного 4-голосного хора"
-                  >
-                    <Users className="w-4 h-4" />
-                    <span>Прослушать всеми партиями (Хор)</span>
-                  </button>
-
-                  <button
-                    onClick={() => onOpenStudyGlas(currentGlasData.number)}
-                    className="flex items-center justify-center gap-1.5 text-xs text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white underline underline-offset-2 transition-colors"
-                  >
-                    <BookOpen className="w-3.5 h-3.5" />
-                    <span>Подробнее в учебном разделе</span>
-                  </button>
-                </div>
-              </div>
-            </div>
-          )}
-
-        </div>
-
-        {/* Right Column: Scoreboard, Streak & Tone Mastery */}
-        <div className="lg:col-span-4 space-y-6">
-          
-          {/* Main Score Card */}
-          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl p-6 shadow-xs space-y-5">
-            <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-slate-800">
-              <h3 className="font-semibold text-sm text-slate-800 dark:text-slate-200">
-                Результаты тренировки
-              </h3>
-              <div className="flex items-center gap-1 text-xs text-amber-600 dark:text-amber-400 font-semibold">
-                <Flame className="w-4 h-4" />
-                <span>Серия: {stats.currentStreak}</span>
-              </div>
-            </div>
-
-            {/* Score Numbers */}
-            <div className="grid grid-cols-2 gap-3 text-center">
-              <div className="p-3 bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-100 dark:border-emerald-800/40 rounded-2xl">
-                <span className="text-xs font-medium text-emerald-700 dark:text-emerald-400">
-                  Правильно
-                </span>
-                <p className="text-3xl font-bold font-mono text-emerald-700 dark:text-emerald-300 mt-1 tabular-nums">
-                  {stats.correctAnswers}
-                </p>
-              </div>
-
-              <div className="p-3 bg-rose-50 dark:bg-rose-950/30 border border-rose-100 dark:border-rose-800/40 rounded-2xl">
-                <span className="text-xs font-medium text-rose-700 dark:text-rose-400">
-                  Ошибки
-                </span>
-                <p className="text-3xl font-bold font-mono text-rose-700 dark:text-rose-300 mt-1 tabular-nums">
-                  {stats.incorrectAnswers}
-                </p>
-              </div>
-            </div>
-
-            {/* Accuracy & Best Streak */}
-            <div className="space-y-2 pt-1 text-xs text-slate-600 dark:text-slate-400">
-              <div className="flex justify-between font-medium">
-                <span>Точность ответов:</span>
-                <span className="text-slate-900 dark:text-slate-100 font-bold font-mono tabular-nums">
-                  {accuracy}% ({stats.correctAnswers}/{stats.totalQuestions})
-                </span>
-              </div>
-              <div className="w-full bg-slate-100 dark:bg-slate-800 rounded-full h-2 overflow-hidden">
-                <div
-                  className="bg-emerald-500 h-2 rounded-full transition-all duration-300"
-                  style={{ width: `${accuracy}%` }}
-                />
-              </div>
-
-              <div className="flex justify-between pt-2">
-                <span>Лучшая серия:</span>
-                <span className="font-semibold text-slate-900 dark:text-slate-100 font-mono tabular-nums">
-                  {stats.bestStreak} подряд
-                </span>
-              </div>
-            </div>
-
-            {/* Manage audio files button shortcut */}
-            <div className="pt-2 border-t border-slate-100 dark:border-slate-800">
-              <button
-                onClick={onOpenAudioModal}
-                className="w-full flex items-center justify-center gap-2 py-2 px-3 text-xs font-medium text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200 bg-slate-50 dark:bg-slate-800/60 hover:bg-slate-100 rounded-xl transition-colors"
-              >
-                <Settings2 className="w-3.5 h-3.5" />
-                <span>Загрузка / Проверка MP3 файлов</span>
-              </button>
-            </div>
-          </div>
-
-          {/* Glas Accuracy Matrix */}
-          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl p-6 shadow-xs space-y-3">
-            <h4 className="font-semibold text-xs text-slate-800 dark:text-slate-200 uppercase tracking-wider">
-              Успеваемость по гласам
-            </h4>
-            
-            <div className="space-y-2">
-              {GLAS_LIST.map((g) => {
-                const stat = stats.glasStats[g] || { attempts: 0, correct: 0 };
-                const pct = stat.attempts > 0 ? Math.round((stat.correct / stat.attempts) * 100) : 0;
-                
                 return (
-                  <div key={g} className="flex items-center justify-between text-xs">
-                    <span className="w-16 font-medium text-slate-700 dark:text-slate-300">
-                      Глас {g}
+                  <button
+                    key={glas}
+                    disabled={isAnswered}
+                    onClick={() => handleSelectGlas(glas)}
+                    className={`h-16 rounded-2xl border text-center transition-all flex flex-col items-center justify-center p-1 shadow-xs ${btnStyle}`}
+                  >
+                    <span className="text-[10px] uppercase opacity-70 leading-none">
+                      Глас
                     </span>
-                    <div className="flex-1 mx-3 bg-slate-100 dark:bg-slate-800 h-1.5 rounded-full overflow-hidden">
-                      <div
-                        className={`h-1.5 rounded-full ${
-                          stat.attempts === 0
-                            ? 'bg-transparent'
-                            : pct >= 80
-                            ? 'bg-emerald-500'
-                            : pct >= 50
-                            ? 'bg-amber-500'
-                            : 'bg-rose-500'
-                        }`}
-                        style={{ width: `${stat.attempts === 0 ? 0 : pct}%` }}
-                      />
-                    </div>
-                    <span className="w-14 text-right font-mono text-[11px] text-slate-500 dark:text-slate-400 tabular-nums">
-                      {stat.attempts === 0 ? '—' : `${pct}% (${stat.correct}/${stat.attempts})`}
+                    <span className="text-2xl font-bold font-ecclesiastical leading-none mt-1">
+                      {glas}
                     </span>
-                  </div>
+                  </button>
                 );
               })}
             </div>
           </div>
 
-        </div>
+          {/* Answer Feedback & Actions */}
+          {isAnswered && feedback && (
+            <div
+              className={`rounded-2xl p-4 border transition-all space-y-3 ${
+                feedback.isCorrect
+                  ? 'bg-emerald-50 dark:bg-emerald-950/40 border-emerald-200 dark:border-emerald-800'
+                  : 'bg-rose-50 dark:bg-rose-950/40 border-rose-200 dark:border-rose-800'
+              }`}
+            >
+              <div className="flex items-center gap-2">
+                {feedback.isCorrect ? (
+                  <div className="w-6 h-6 rounded-full bg-emerald-600 text-white flex items-center justify-center shrink-0">
+                    <Check className="w-4 h-4 stroke-[3]" />
+                  </div>
+                ) : (
+                  <div className="w-6 h-6 rounded-full bg-rose-600 text-white flex items-center justify-center shrink-0">
+                    <X className="w-4 h-4 stroke-[3]" />
+                  </div>
+                )}
+                <span className="text-base font-bold font-ecclesiastical text-slate-900 dark:text-slate-100">
+                  {feedback.message}
+                </span>
+              </div>
 
+              {/* Action buttons */}
+              <div className="flex flex-col sm:flex-row gap-2 pt-1">
+                {/* Play Full Choir (ALL-N.mp3) */}
+                <button
+                  onClick={handlePlayAllVoices}
+                  className="flex-1 flex items-center justify-center gap-1.5 py-2.5 px-3 bg-purple-700 hover:bg-purple-800 text-white text-xs font-semibold rounded-xl shadow-xs transition-colors whitespace-nowrap active:scale-95"
+                >
+                  <Users className="w-4 h-4" />
+                  <span>Прослушать всеми партиями (весь хор)</span>
+                </button>
+
+                {/* Next Question */}
+                <button
+                  onClick={handleNextQuestion}
+                  className="flex-1 flex items-center justify-center gap-1.5 py-2.5 px-4 bg-slate-900 hover:bg-slate-800 dark:bg-slate-100 dark:text-slate-900 text-white text-xs font-semibold rounded-xl shadow-xs transition-colors whitespace-nowrap active:scale-95"
+                >
+                  <span>Следующий запев</span>
+                  <ArrowRight className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+          )}
+        </>
+      )}
+
+      {/* Compact Mobile Scoreboard Bar */}
+      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-3 shadow-xs flex items-center justify-around text-center text-xs">
+        <div>
+          <span className="text-[11px] text-slate-500 block">Правильно</span>
+          <span className="text-base font-bold font-mono text-emerald-600 dark:text-emerald-400 tabular-nums">
+            {stats.correctAnswers}
+          </span>
+        </div>
+        <div className="h-6 w-px bg-slate-200 dark:bg-slate-800" />
+        <div>
+          <span className="text-[11px] text-slate-500 block">Ошибок</span>
+          <span className="text-base font-bold font-mono text-rose-600 dark:text-rose-400 tabular-nums">
+            {stats.incorrectAnswers}
+          </span>
+        </div>
+        <div className="h-6 w-px bg-slate-200 dark:bg-slate-800" />
+        <div className="flex flex-col items-center">
+          <span className="text-[11px] text-slate-500 flex items-center gap-1">
+            <Flame className="w-3 h-3 text-amber-500" />
+            <span>Серия</span>
+          </span>
+          <span className="text-base font-bold font-mono text-amber-600 dark:text-amber-400 tabular-nums">
+            {stats.currentStreak}
+          </span>
+        </div>
       </div>
+
     </div>
   );
 };

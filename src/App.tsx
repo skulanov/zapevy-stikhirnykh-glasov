@@ -7,14 +7,11 @@ import React, { useState, useEffect } from 'react';
 import { Header } from './components/Header';
 import { TrainerTab } from './components/TrainerTab';
 import { StudyTab } from './components/StudyTab';
-import { AudioBatchModal } from './components/AudioBatchModal';
-import { StatsModal } from './components/StatsModal';
-import { GitHubGuideModal } from './components/GitHubGuideModal';
-import { GlasNumber, QuizStats, VoiceType } from './types/chant';
-import { audioManager } from './services/audioManager';
+import { GlasNumber, MasteredByVoice, QuizStats } from './types/chant';
 
-const STATS_STORAGE_KEY = 'zapevy_trainer_stats_v1';
-const THEME_STORAGE_KEY = 'zapevy_theme_v1';
+const STATS_STORAGE_KEY = 'zapevy_trainer_stats_v2';
+const THEME_STORAGE_KEY = 'zapevy_theme_v2';
+const MASTERED_STORAGE_KEY = 'zapevy_mastered_v2';
 
 const defaultStats: QuizStats = {
   totalQuestions: 0,
@@ -41,12 +38,15 @@ const defaultStats: QuizStats = {
   history: [],
 };
 
+const defaultMastered: MasteredByVoice = {
+  S: [],
+  A: [],
+  T: [],
+  B: [],
+};
+
 export default function App() {
   const [activeTab, setActiveTab] = useState<'trainer' | 'study'>('trainer');
-  const [studyGlas, setStudyGlas] = useState<GlasNumber>(1);
-  const [isAudioModalOpen, setIsAudioModalOpen] = useState(false);
-  const [isStatsModalOpen, setIsStatsModalOpen] = useState(false);
-  const [isGitHubModalOpen, setIsGitHubModalOpen] = useState(false);
   const [isDarkMode, setIsDarkMode] = useState<boolean>(() => {
     if (typeof window !== 'undefined') {
       const saved = localStorage.getItem(THEME_STORAGE_KEY);
@@ -68,7 +68,19 @@ export default function App() {
     return defaultStats;
   });
 
-  // Sync dark mode class with <html>
+  const [masteredByVoice, setMasteredByVoice] = useState<MasteredByVoice>(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        const saved = localStorage.getItem(MASTERED_STORAGE_KEY);
+        if (saved) return JSON.parse(saved);
+      } catch {
+        // use default
+      }
+    }
+    return defaultMastered;
+  });
+
+  // Sync dark theme
   useEffect(() => {
     const root = document.documentElement;
     if (isDarkMode) {
@@ -90,19 +102,14 @@ export default function App() {
     }
   };
 
-  const handleResetStats = () => {
-    setStats(defaultStats);
+  // Persist mastered glas
+  const handleUpdateMastered = (newMastered: MasteredByVoice) => {
+    setMasteredByVoice(newMastered);
     try {
-      localStorage.removeItem(STATS_STORAGE_KEY);
+      localStorage.setItem(MASTERED_STORAGE_KEY, JSON.stringify(newMastered));
     } catch {
       // ignore
     }
-  };
-
-  const handleOpenStudyGlas = (glas: GlasNumber) => {
-    setStudyGlas(glas);
-    setActiveTab('study');
-    window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
   return (
@@ -112,78 +119,30 @@ export default function App() {
       <Header
         activeTab={activeTab}
         onSelectTab={setActiveTab}
-        onOpenAudioModal={() => setIsAudioModalOpen(true)}
-        onOpenGitHubModal={() => setIsGitHubModalOpen(true)}
-        onOpenStatsModal={() => setIsStatsModalOpen(true)}
         isDarkMode={isDarkMode}
         onToggleDarkMode={() => setIsDarkMode(!isDarkMode)}
-        streakCount={stats.currentStreak}
       />
 
-      {/* Main Content Area */}
-      <main className="flex-1 max-w-6xl w-full mx-auto px-4 sm:px-6 py-6 sm:py-8">
-        
-        {/* Tab Content */}
+      {/* Main Container - Mobile First */}
+      <main className="flex-1 w-full max-w-xl mx-auto px-3 sm:px-4 py-4 sm:py-6">
         {activeTab === 'trainer' ? (
           <TrainerTab
             stats={stats}
             onUpdateStats={handleUpdateStats}
-            onOpenStudyGlas={handleOpenStudyGlas}
-            onOpenAudioModal={() => setIsAudioModalOpen(true)}
+            masteredByVoice={masteredByVoice}
+            onUpdateMastered={handleUpdateMastered}
           />
         ) : (
-          <StudyTab
-            initialGlas={studyGlas}
-            onStartTrainingWithVoice={(voice) => {
-              setActiveTab('trainer');
-              window.scrollTo({ top: 0, behavior: 'smooth' });
-            }}
-          />
+          <StudyTab />
         )}
-
       </main>
 
-      {/* Footer */}
-      <footer className="border-t border-slate-200 dark:border-slate-800/80 py-6 text-xs text-slate-500 dark:text-slate-400 bg-white/60 dark:bg-slate-900/40">
-        <div className="max-w-6xl mx-auto px-4 sm:px-6 flex flex-col sm:flex-row items-center justify-between gap-3">
-          <p className="font-ecclesiastical text-sm text-slate-700 dark:text-slate-300">
-            «Пойте Богу нашему, пойте, пойте Цареви нашему, пойте» (Пс. 46:7)
-          </p>
-          <div className="flex items-center gap-4 text-xs">
-            <button
-              onClick={() => setIsGitHubModalOpen(true)}
-              className="hover:text-slate-900 dark:hover:text-slate-200 transition-colors"
-            >
-              Инструкция GitHub
-            </button>
-            <span aria-hidden="true">·</span>
-            <button
-              onClick={() => setIsAudioModalOpen(true)}
-              className="hover:text-slate-900 dark:hover:text-slate-200 transition-colors"
-            >
-              Статус 40 аудиофайлов
-            </button>
-          </div>
-        </div>
+      {/* Clean minimal footer */}
+      <footer className="py-4 text-center text-xs text-slate-400 dark:text-slate-600 border-t border-slate-200/60 dark:border-slate-800/60">
+        <p className="font-ecclesiastical text-sm text-slate-600 dark:text-slate-400">
+          «Пойте Богу нашему, пойте, пойте Цареви нашему, пойте» (Пс. 46:7)
+        </p>
       </footer>
-
-      {/* Modals */}
-      <AudioBatchModal
-        isOpen={isAudioModalOpen}
-        onClose={() => setIsAudioModalOpen(false)}
-      />
-
-      <StatsModal
-        isOpen={isStatsModalOpen}
-        onClose={() => setIsStatsModalOpen(false)}
-        stats={stats}
-        onResetStats={handleResetStats}
-      />
-
-      <GitHubGuideModal
-        isOpen={isGitHubModalOpen}
-        onClose={() => setIsGitHubModalOpen(false)}
-      />
 
     </div>
   );

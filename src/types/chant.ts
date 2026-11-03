@@ -7,6 +7,8 @@ export type VoiceType = 'S' | 'A' | 'T' | 'B' | 'ALL';
 export type VoiceFilter = 'ANY' | 'S' | 'A' | 'T' | 'B';
 export type GlasNumber = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8;
 
+export type MasteredByVoice = Record<'S' | 'A' | 'T' | 'B', GlasNumber[]>;
+
 export interface VoiceDetails {
   title: string;
   clef: string;
@@ -33,13 +35,12 @@ export interface GlasInfo {
     B: VoiceDetails;
     ALL: VoiceDetails;
   };
-  // Frequency data for chant synthesizer (fallback audio)
   synthScore: {
     bpm: number;
     measures: Array<{
-      duration: number; // in beats
+      duration: number;
       notes: {
-        S: string; // note name like "F4"
+        S: string;
         A: string;
         T: string;
         B: string;
