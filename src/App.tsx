@@ -135,6 +135,7 @@ export default function App() {
           <TrainerTab
             stats={stats}
             onUpdateStats={handleUpdateStats}
+            onResetStats={() => handleUpdateStats(defaultStats)}
             masteredByVoice={masteredByVoice}
             onUpdateMastered={handleUpdateMastered}
           />

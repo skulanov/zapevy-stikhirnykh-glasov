@@ -23,6 +23,7 @@ import { GlasNumber, MasteredByVoice, QuizQuestion, QuizStats, VoiceFilter, Voic
 interface TrainerTabProps {
   stats: QuizStats;
   onUpdateStats: (newStats: QuizStats) => void;
+  onResetStats?: () => void;
   masteredByVoice: MasteredByVoice;
   onUpdateMastered: (newMastered: MasteredByVoice) => void;
 }
@@ -30,6 +31,7 @@ interface TrainerTabProps {
 export const TrainerTab: React.FC<TrainerTabProps> = ({
   stats,
   onUpdateStats,
+  onResetStats,
   masteredByVoice,
   onUpdateMastered,
 }) => {
@@ -43,6 +45,53 @@ export const TrainerTab: React.FC<TrainerTabProps> = ({
   // Track glas remaining in current non-repeating 8-glas cycle
   const [roundPool, setRoundPool] = useState<GlasNumber[]>([]);
   const [showMasteredList, setShowMasteredList] = useState(false);
+  const [justResetStats, setJustResetStats] = useState(false);
+  const lastScoreTapRef = React.useRef<number>(0);
+
+  const handleResetScore = useCallback(() => {
+    if (onResetStats) {
+      onResetStats();
+    } else {
+      onUpdateStats({
+        totalQuestions: 0,
+        correctAnswers: 0,
+        incorrectAnswers: 0,
+        currentStreak: 0,
+        bestStreak: 0,
+        glasStats: {
+          1: { attempts: 0, correct: 0 },
+          2: { attempts: 0, correct: 0 },
+          3: { attempts: 0, correct: 0 },
+          4: { attempts: 0, correct: 0 },
+          5: { attempts: 0, correct: 0 },
+          6: { attempts: 0, correct: 0 },
+          7: { attempts: 0, correct: 0 },
+          8: { attempts: 0, correct: 0 },
+        },
+        voiceStats: {
+          S: { attempts: 0, correct: 0 },
+          A: { attempts: 0, correct: 0 },
+          T: { attempts: 0, correct: 0 },
+          B: { attempts: 0, correct: 0 },
+        },
+        history: [],
+      });
+    }
+    setJustResetStats(true);
+    setTimeout(() => {
+      setJustResetStats(false);
+    }, 1500);
+  }, [onResetStats, onUpdateStats]);
+
+  const handleScoreTapOrClick = () => {
+    const now = Date.now();
+    if (now - lastScoreTapRef.current < 400) {
+      handleResetScore();
+      lastScoreTapRef.current = 0;
+    } else {
+      lastScoreTapRef.current = now;
+    }
+  };
 
   useEffect(() => {
     return audioManager.subscribe((st) => {
@@ -571,34 +620,55 @@ export const TrainerTab: React.FC<TrainerTabProps> = ({
         </>
       )}
 
-      {/* Compact Mobile Scoreboard Bar with #AFE800 for correct answers digits */}
-      <div className="bg-white dark:bg-stone-900/90 border border-stone-200/80 dark:border-stone-800/80 rounded-2xl p-3 shadow-xs flex items-center justify-around text-center text-xs">
-        <div>
-          <span className="text-[11px] text-stone-500 block">Правильно</span>
-          <span
-            className="text-lg font-bold font-mono tabular-nums inline-block mt-0.5"
-            style={{ color: '#AFE800' }}
-          >
-            {stats.correctAnswers}
-          </span>
+      {/* Compact Mobile Scoreboard Bar with double-click / double-tap to reset */}
+      <div className="space-y-1">
+        <div
+          onClick={handleScoreTapOrClick}
+          onDoubleClick={handleResetScore}
+          title="Дважды нажмите, чтобы обнулить счёт"
+          className={`bg-white dark:bg-stone-900/90 border rounded-2xl p-3 shadow-xs flex items-center justify-around text-center text-xs select-none cursor-pointer transition-all active:scale-[0.99] touch-manipulation ${
+            justResetStats
+              ? 'border-[#AFE800] ring-2 ring-[#AFE800]/40 bg-[#AFE800]/10 dark:bg-[#AFE800]/10'
+              : 'border-stone-200/80 dark:border-stone-800/80 hover:border-stone-300 dark:hover:border-stone-700'
+          }`}
+        >
+          <div>
+            <span className="text-[11px] text-stone-500 block">Правильно</span>
+            <span
+              className="text-lg font-bold font-mono tabular-nums inline-block mt-0.5"
+              style={{ color: '#AFE800' }}
+            >
+              {stats.correctAnswers}
+            </span>
+          </div>
+          <div className="h-6 w-px bg-stone-200 dark:bg-stone-800" />
+          <div>
+            <span className="text-[11px] text-stone-500 block">Ошибок</span>
+            <span className="text-lg font-bold font-mono text-rose-600 dark:text-rose-400 tabular-nums inline-block mt-0.5">
+              {stats.incorrectAnswers}
+            </span>
+          </div>
+          <div className="h-6 w-px bg-stone-200 dark:bg-stone-800" />
+          <div className="flex flex-col items-center">
+            <span className="text-[11px] text-stone-500 flex items-center gap-1">
+              <Flame className="w-3 h-3 text-[#E9DC00]" />
+              <span>Серия</span>
+            </span>
+            <span className="text-lg font-bold font-mono text-stone-800 dark:text-stone-200 tabular-nums inline-block mt-0.5">
+              {stats.currentStreak}
+            </span>
+          </div>
         </div>
-        <div className="h-6 w-px bg-stone-200 dark:bg-stone-800" />
-        <div>
-          <span className="text-[11px] text-stone-500 block">Ошибок</span>
-          <span className="text-lg font-bold font-mono text-rose-600 dark:text-rose-400 tabular-nums inline-block mt-0.5">
-            {stats.incorrectAnswers}
-          </span>
-        </div>
-        <div className="h-6 w-px bg-stone-200 dark:bg-stone-800" />
-        <div className="flex flex-col items-center">
-          <span className="text-[11px] text-stone-500 flex items-center gap-1">
-            <Flame className="w-3 h-3 text-[#E9DC00]" />
-            <span>Серия</span>
-          </span>
-          <span className="text-lg font-bold font-mono text-stone-800 dark:text-stone-200 tabular-nums inline-block mt-0.5">
-            {stats.currentStreak}
-          </span>
-        </div>
+
+        {justResetStats ? (
+          <p className="text-[10px] text-center text-[#86b500] dark:text-[#AFE800] font-semibold transition-opacity">
+            ✓ Счёт обнулён
+          </p>
+        ) : (
+          <p className="text-[10px] text-center text-stone-400 dark:text-stone-500 select-none">
+            Дважды нажмите на блок со счётом для обнуления
+          </p>
+        )}
       </div>
 
     </div>
